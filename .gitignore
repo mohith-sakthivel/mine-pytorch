@@ -1,0 +1,8 @@
+# temp 
+*__pycache__
+# datasets
+MNIST
+# code editor
+.vscode
+# logs
+logs
