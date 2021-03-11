@@ -182,7 +182,7 @@ class MINE_Classifier(Classifer):
 
 
 def run(experiment, args):
-
+    pl.seed_everything(args['seed'])
     if experiment == 'deter':
         Model = Classifer
     elif experiment == 'mine':
@@ -252,10 +252,10 @@ def get_default_args(experiment):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog='Information BottleNeck with MINE')
+    parser.add_argument('--seed', action='store', type=int)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--deter', action='store_const', const=True, default=False)
     group.add_argument('--mine', action='store_const', const=True, default=False)
-    parser.add_argument('--seed', help='experiment seed', type=int, default=0)
     args = parser.parse_args()
 
     if args.deter:
