@@ -75,6 +75,15 @@ class Classifer(pl.LightningModule):
         x = self._get_embedding(x)
         return self._logits(x)
 
+    def get_eval_stats(self, batch, batch_idx):
+        stats = {}
+        x, y = batch
+        x = x.view(x.shape[0], -1)
+        y_pred = self(x)
+        y_pred = torch.argmax(y_pred, dim=1)
+        stats['error'] = torch.sum(y != y_pred)/len(y)*100
+        return stats
+
     def training_step(self, batch, batch_idx):
         x, y = batch
         x = x.view(x.shape[0], -1)
@@ -85,14 +94,14 @@ class Classifer(pl.LightningModule):
                  on_step=False, prog_bar=True)
         return loss
 
+    def validation_step(self, batch, batch_idx):
+        stats = self.get_eval_stats(batch, batch_idx)
+        self.log('test_error_during_train', stats['error'])
+
     def test_step(self, batch, batch_idx):
-        x, y = batch
-        x = x.view(x.shape[0], -1)
-        y_pred = self(x)
-        y_pred = torch.argmax(y_pred, dim=1)
-        error = torch.sum(y != y_pred)/len(y)*100
-        self.log('error_rate', error)
-        return {'error_rate', error}
+        stats = self.get_eval_stats(batch, batch_idx)
+        self.log('test_error', stats['error'])
+        return {'test_error', stats['error']}
 
 
 class MINE_Classifier(Classifer):
@@ -100,7 +109,7 @@ class MINE_Classifier(Classifer):
         super().__init__(base_net, K, **kwargs)
         self._T = StatisticsNet(28*28, K)
         self.automatic_optimization = False
-        self._decay = 0.9
+        self._decay = 0.5
         self.save_hyperparameters('beta')
 
     def configure_optimizers(self):
@@ -119,22 +128,21 @@ class MINE_Classifier(Classifer):
         return x, x_dist
 
     def _reduce_bias(self, biased_value, t_margin):
-        with torch.no_grad():
-            exp_t = torch.exp(t_margin).mean(dim=0)
-            if hasattr(self, '_exp_t_ma'):
-                self._exp_t_ma = self._decay * \
-                    self._exp_t_ma + (1-self._decay) * exp_t
-            else:
-                self._exp_t_ma = exp_t
-            correction = exp_t/self._exp_t_ma
-        return correction * biased_value
+        exp_t = torch.exp(t_margin).mean(dim=0)
+        if hasattr(self, '_exp_t_ma'):
+            self._exp_t_ma = \
+                self._decay * self._exp_t_ma + (1-self._decay) * exp_t
+        else:
+            self._exp_t_ma = exp_t
+        correction = exp_t/self._exp_t_ma
+        return correction.detach() * biased_value
 
     def _get_mi_bound(self, T, x, z):
         t_joint = T(x, z).mean(dim=0)
         z_margin = z[torch.randperm(x.shape[0])]
         t_margin = T(x, z_margin)
         log_exp_t = torch.logsumexp(t_margin, dim=0) - math.log(x.shape[0])
-        log_exp_t = self._reduce_bias(log_exp_t, t_margin)
+        # log_exp_t = self._reduce_bias(log_exp_t, t_margin)
         mi = t_joint - log_exp_t
         return mi
 
@@ -209,7 +217,9 @@ def run(experiment, args):
 
     trainer = pl.Trainer(gpus=args['gpus'],
                          max_epochs=args['epochs'],
-                         default_root_dir=args['log_dir']+'/'+experiment)
+                         default_root_dir=args['log_dir']+'/'+experiment,
+                         check_val_every_n_epoch=5,
+                         num_sanity_val_steps=0)
 
     _ = trainer.fit(model, train_dataloader=train_loader)
     _ = trainer.test(test_dataloaders=test_loader)
@@ -220,7 +230,7 @@ def get_default_args(experiment):
     Returns default experiment arguments
     """
 
-    default_args = {
+    args = {
         'seed': 0,
         # Trainer args
         'gpus': 1,
@@ -232,30 +242,34 @@ def get_default_args(experiment):
         # Model args
         'model_args': {
             'lr': 1e-4,
-            'use_polyak': True,
+            'use_polyak': False,
         }
     }
 
     if experiment == 'deter':
-        default_args['model_args']['K'] = 1024
-        default_args['model_args']['base_net_args'] = {
+        args['model_args']['K'] = 1024
+        args['model_args']['base_net_args'] = {
             'layers': [784, 1024], 'stochastic': False}
 
     elif experiment == 'mine':
-        default_args['model_args']['K'] = 256
-        default_args['model_args']['beta'] = 1e-2
-        default_args['model_args']['base_net_args'] = {
+        args['model_args']['K'] = 256
+        args['model_args']['beta'] = 1e-2
+        args['model_args']['base_net_args'] = {
             'layers': [784, 1024, 1024], 'stochastic': True}
 
-    return default_args
+    return args
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog='Information BottleNeck with MINE')
     parser.add_argument('--seed', action='store', type=int)
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--deter', action='store_const', const=True, default=False)
-    group.add_argument('--mine', action='store_const', const=True, default=False)
+    group.add_argument('--deter', action='store_const',
+                       const=True, default=False)
+    group.add_argument('--mine', action='store_const',
+                       const=True, default=False)
+    parser.add_argument('--beta', action='store', type=float,
+                        help='information bottleneck ')
     args = parser.parse_args()
 
     if args.deter:
@@ -266,5 +280,8 @@ if __name__ == "__main__":
     exp_args = get_default_args(experiment)
     for key, value in args.__dict__.items():
         exp_args[key] = value
+
+    if args.beta is not None:
+        exp_args['model_args']['beta'] = args.beta
 
     run(experiment, exp_args)

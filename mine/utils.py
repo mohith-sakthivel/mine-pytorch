@@ -6,6 +6,9 @@ from pytorch_lightning.callbacks import Callback
 
 
 class PolyakAveraging(Callback):
+    """
+    Calculates exponential moving average of parameter weights during training
+    """
 
     def __init__(self, alpha=0.999):
         self._alpha = alpha
