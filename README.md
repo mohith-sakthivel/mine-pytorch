@@ -6,13 +6,13 @@ A standard baseline MLP (as described in Deep VIB paper [Alemi et al., 2017]) ha
 
 ## Setup
 
-    ```
-    git clone https://github.com/mohith-sakthivel/mutual_information_neural_estimation.git mine
-    cd mine
+```
+git clone https://github.com/mohith-sakthivel/mutual_information_neural_estimation.git mine
+cd mine
 
-    conda create -n mine -f environment.yml
-    conda activate mine
-    ```
+conda create -n mine -f environment.yml
+conda activate mine
+```
 
 ## Run
 * To run the baseline model with default parameters
