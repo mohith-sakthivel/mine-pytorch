@@ -57,6 +57,7 @@ class Classifer(nn.Module):
         self._model_list = [self._base_net, self._logits]
         self._current_epoch = 0
         self._initialize_weights()
+        self._configure_optimizers()
         self._configure_callbacks()
 
     def _initialize_weights(self):
@@ -68,7 +69,7 @@ class Classifer(nn.Module):
             else:
                 raise ValueError
 
-    def configure_optimizers(self):
+    def _configure_optimizers(self):
         optimizer = optim.Adam(
             self.get_model_parameters(), lr=self._lr, betas=(0.5, 0.999))
         scheduler = {
@@ -143,29 +144,17 @@ class Classifer(nn.Module):
         logger.scalar(stats['error'], 'error', accumulator='test')
 
 
-class Variable:
-    def __init__(self, val=None):
-        self._value = val
-
-    def get(self):
-        return self._value
-
-    def set(self, value):
-        self._value = value
-
-
 class MINE_Classifier(Classifer):
     def __init__(self, base_net, K, beta=1e-3, unbiased=True, **kwargs):
         super().__init__(base_net, K, **kwargs)
         self._T = StatisticsNet(28*28, K)
-        self._decay = 0.999
+        self._decay = 0.999 # decay for ema (not tuned)
         self._beta = beta
         self._unbiased = unbiased
-        self._model_ema = Variable()
-        self._mine_ema = Variable()
+        self._ema = None
+        self._configure_mine_optimizers()
 
-    def configure_optimizers(self):
-        super().configure_optimizers()
+    def _configure_mine_optimizers(self):
         mine_opt = optim.Adam(self._T.parameters(),
                               lr=self._lr, betas=(0.5, 0.999))
         scheduler = {
@@ -187,27 +176,28 @@ class MINE_Classifier(Classifer):
     def step_epoch(self):
         self._current_epoch += 1
 
-    def _update_ema(self, t_margin, ema):
+    def _update_ema(self, t_margin):
         with torch.no_grad():
             exp_t = t_margin.exp().mean(dim=0)
-            if ema.get() is not None:
-                ema.set(self._decay * ema.get() + (1-self._decay) * exp_t)
+            if self._ema is not None:
+                self._ema = self._decay * self._ema + (1-self._decay) * exp_t
             else:
-                ema.set(exp_t)
+                self._ema = exp_t
 
-    def _get_mi_bound(self, x, z, ema=None):
+    def _get_mi_bound(self, x, z, update_ema=False):
         t_joint = self._T(x, z).mean(dim=0)
         z_margin = z[torch.randperm(x.shape[0])]
         t_margin = self._T(x, z_margin)
         # maintain an exponential moving average of exp_t under the marginal distribution
         # done to reduce bias in the estimator
-        if self._unbiased and self._current_epoch > 5:
-            self._update_ema(t_margin, ema)
+        if self._unbiased and update_ema and self._current_epoch > 5:
+            self._update_ema(t_margin)
         # Calculate biased or unbiased estimate
         if self._unbiased and self._current_epoch > 10:
-            log_exp_t = UnbiasedLogMeanExp.apply(t_margin, ema.get())
+            log_exp_t = UnbiasedLogMeanExp.apply(t_margin, self._ema)
         else:
-            log_exp_t = t_margin.logsumexp(dim=0).subtract(math.log(x.shape[0]))
+            log_exp_t = t_margin.logsumexp(
+                dim=0).subtract(math.log(x.shape[0]))
         # mi lower bound
         return t_joint - log_exp_t
 
@@ -217,7 +207,7 @@ class MINE_Classifier(Classifer):
         # calculate loss
         z, z_dist = self._get_train_embedding(x)
         self._cache = {'z': z.detach()}  # cache z for MINE loss calculation
-        mi_xz = self._get_mi_bound(x, z, self._model_ema)
+        mi_xz = self._get_mi_bound(x, z, update_ema=True)
         logits = self._logits(z)
         cross_entropy = F.cross_entropy(logits, y)
         loss = cross_entropy + self._beta * mi_xz
@@ -236,7 +226,7 @@ class MINE_Classifier(Classifer):
     def mine_train_step(self, x, z, opt, logger):
         opt.zero_grad()
         # calculate loss
-        loss = -self._get_mi_bound(x, z.detach(), self._mine_ema)
+        loss = -self._get_mi_bound(x, z.detach())
         # log stats
         logger.scalar(loss, 'estimator_loss',
                       accumulator='train', progbar=True)
@@ -287,7 +277,6 @@ def run(model_id, args):
 
     model = Model(MLP, **args['model_args'])
     model.to(args['device'])
-    model.configure_optimizers()
 
     # Training loop
     model.invoke_callback('on_train_start')
@@ -335,7 +324,7 @@ def get_default_args(model_id):
     """
 
     args = {
-        'exp_name': 'mine_unbiased_beta_0.99_debug',
+        'exp_name': 'mine_ib',
         'seed': 0,
         # Trainer args
         'device': 'cuda',
