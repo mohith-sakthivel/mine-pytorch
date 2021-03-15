@@ -9,7 +9,7 @@ class MLP(nn.Module):
     """
 
     def __init__(self, input_dim, output_dim, layers, stochastic=False,
-                 act=lambda: nn.ReLU(inplace=True), init_std_bias=0.0, min_std=1e-5):
+                 act=nn.ReLU, init_std_bias=0.0, min_std=1e-6):
         super().__init__()
         self._stochastic = stochastic
         self._init_std_bias = init_std_bias
@@ -55,6 +55,6 @@ class StatisticsNet(nn.Module):
         x = torch.cat([x, z], dim=1)
         x = x + 0.3 * torch.randn_like(x)
         for hid_layer in self._layers:
-            x = F.elu(hid_layer(x), inplace=True)
+            x = F.elu(hid_layer(x))
             x = x + 0.5 * torch.randn_like(x)
         return self._out_layer(x)
