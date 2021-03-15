@@ -54,7 +54,8 @@ class Classifer(nn.Module):
         self._base_net = base_net(
             input_dim=28*28, output_dim=K, **base_net_args)
         self._logits = nn.Linear(K, 10)
-        self._polyak_list = [self._base_net, self._logits]
+        self._model_list = [self._base_net, self._logits]
+        self._current_epoch = 0
         self._initialize_weights()
         self._configure_callbacks()
 
@@ -69,7 +70,7 @@ class Classifer(nn.Module):
 
     def configure_optimizers(self):
         optimizer = optim.Adam(
-            self.parameters(), lr=self._lr, betas=(0.5, 0.999))
+            self.get_model_parameters(), lr=self._lr, betas=(0.5, 0.999))
         scheduler = {
             'scheduler': optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.97),
             'frequency': 2
@@ -91,8 +92,8 @@ class Classifer(nn.Module):
                 func = getattr(callback, hook)
                 func(self)
 
-    def polyak_parameters(self):
-        return itertools.chain(*[module.parameters() for module in self._polyak_list])
+    def get_model_parameters(self):
+        return itertools.chain(*[module.parameters() for module in self._model_list])
 
     def _unpack_batch(self, batch):
         batch = [item.to(self.device) for item in batch]
@@ -106,7 +107,7 @@ class Classifer(nn.Module):
         return x
 
     def forward(self, x):
-        x = self._get_embedding(x.to(self.device))
+        x = self._get_embedding(x)
         return self._logits(x)
 
     def _get_eval_stats(self, batch, batch_idx):
@@ -142,21 +143,37 @@ class Classifer(nn.Module):
         logger.scalar(stats['error'], 'error', accumulator='test')
 
 
+class Variable:
+    def __init__(self, val=None):
+        self._value = val
+
+    def get(self):
+        return self._value
+
+    def set(self, value):
+        self._value = value
+
+
 class MINE_Classifier(Classifer):
-    def __init__(self, base_net, K, beta=1e-3, **kwargs):
+    def __init__(self, base_net, K, beta=1e-3, unbiased=True, **kwargs):
         super().__init__(base_net, K, **kwargs)
         self._T = StatisticsNet(28*28, K)
-        self._decay = 0.99
+        self._decay = 0.999
         self._beta = beta
-        self._unbiased = True
-        self._current_epoch = 0
+        self._unbiased = unbiased
+        self._model_ema = Variable()
+        self._mine_ema = Variable()
 
     def configure_optimizers(self):
         super().configure_optimizers()
         mine_opt = optim.Adam(self._T.parameters(),
                               lr=self._lr, betas=(0.5, 0.999))
-
+        scheduler = {
+            'scheduler': optim.lr_scheduler.ExponentialLR(mine_opt, gamma=0.97),
+            'frequency': 2
+        }
         self.optimizers.append(mine_opt)
+        self.schedulers.append(scheduler)
 
     def _get_train_embedding(self, x):
         x = self._base_net(x)
@@ -170,24 +187,25 @@ class MINE_Classifier(Classifer):
     def step_epoch(self):
         self._current_epoch += 1
 
-    def _update_ema(self, t_margin):
+    def _update_ema(self, t_margin, ema):
         with torch.no_grad():
             exp_t = t_margin.exp().mean(dim=0)
-            if hasattr(self, '_exp_t_ma'):
-                self._exp_t_ma = self._decay * self._exp_t_ma + (1-self._decay) * exp_t
+            if ema.get() is not None:
+                ema.set(self._decay * ema.get() + (1-self._decay) * exp_t)
             else:
-                self._exp_t_ma = exp_t
+                ema.set(exp_t)
 
-    def _get_mi_bound(self, T, x, z, update_ema=False):
-        t_joint = T(x, z).mean(dim=0)
+    def _get_mi_bound(self, x, z, ema=None):
+        t_joint = self._T(x, z).mean(dim=0)
         z_margin = z[torch.randperm(x.shape[0])]
-        t_margin = T(x, z_margin)
-        # update exponential moving average for unibiased estimate
-        if self._unbiased and update_ema and self._current_epoch > 5:
-            self._update_ema(t_margin)
-        # Calculate biased or unbiased estimate (post annealing period only)
+        t_margin = self._T(x, z_margin)
+        # maintain an exponential moving average of exp_t under the marginal distribution
+        # done to reduce bias in the estimator
+        if self._unbiased and self._current_epoch > 5:
+            self._update_ema(t_margin, ema)
+        # Calculate biased or unbiased estimate
         if self._unbiased and self._current_epoch > 10:
-            log_exp_t = UnbiasedLogMeanExp.apply(t_margin, self._exp_t_ma)
+            log_exp_t = UnbiasedLogMeanExp.apply(t_margin, ema.get())
         else:
             log_exp_t = t_margin.logsumexp(dim=0).subtract(math.log(x.shape[0]))
         # mi lower bound
@@ -199,7 +217,7 @@ class MINE_Classifier(Classifer):
         # calculate loss
         z, z_dist = self._get_train_embedding(x)
         self._cache = {'z': z.detach()}  # cache z for MINE loss calculation
-        mi_xz = self._get_mi_bound(self._T, x, z, update_ema=True)
+        mi_xz = self._get_mi_bound(x, z, self._model_ema)
         logits = self._logits(z)
         cross_entropy = F.cross_entropy(logits, y)
         loss = cross_entropy + self._beta * mi_xz
@@ -218,9 +236,9 @@ class MINE_Classifier(Classifer):
     def mine_train_step(self, x, z, opt, logger):
         opt.zero_grad()
         # calculate loss
-        loss = -self._get_mi_bound(self._T, x, z.detach())
+        loss = -self._get_mi_bound(x, z.detach(), self._mine_ema)
         # log stats
-        logger.scalar(loss, 'mi_est_loss',
+        logger.scalar(loss, 'estimator_loss',
                       accumulator='train', progbar=True)
         # step optimizer
         loss.backward()
@@ -264,15 +282,12 @@ def run(model_id, args):
     time_stamp = time.strftime("%d-%m-%Y_%H:%M:%S")
     logdir = logdir.joinpath(model_id, '_'.join(
         [args['exp_name'], 's{}'.format(args['seed']), time_stamp]))
-    global logger
     logger = Logger(log_dir=logdir)
     args['model_args']['logdir'] = logdir
 
     model = Model(MLP, **args['model_args'])
     model.to(args['device'])
     model.configure_optimizers()
-
-    global ee, ss
 
     # Training loop
     model.invoke_callback('on_train_start')
@@ -281,13 +296,13 @@ def run(model_id, args):
         model.train(True)
         for batch_idx, batch in enumerate(tqdm.tqdm(train_loader,
                                                     desc='{}/{} Epochs'.format(
-                                                        epoch, args['epochs']),
+                                                        epoch-1, args['epochs']),
                                                     unit=' batches',
                                                     postfix=logger.get_progbar_desc(),
                                                     leave=False)):
-            batch_stats = model.training_step(batch, batch_idx, logger)
+            _ = model.training_step(batch, batch_idx, logger)
             model.invoke_callback('on_train_batch_end')
-        train_stats = logger.scalar_queue_flush('train', epoch)
+        _ = logger.scalar_queue_flush('train', epoch)
 
         for sch in model.schedulers:
             if epoch % sch['frequency'] == 0:
@@ -309,8 +324,9 @@ def run(model_id, args):
     for batch_idx, batch in enumerate(test_loader):
         model.test_step(batch, batch_idx, logger)
     test_out = logger.scalar_queue_flush('test', epoch)
-
+    print('***************************************************')
     print('Model Test Error: {:.4f}%'.format(test_out['error']))
+    print('***************************************************')
 
 
 def get_default_args(model_id):
@@ -343,9 +359,9 @@ def get_default_args(model_id):
 
     elif model_id == 'mine':
         args['model_args']['K'] = 256
-        args['model_args']['beta'] = 1e-3
         args['model_args']['base_net_args'] = {
             'layers': [784, 1024, 1024], 'stochastic': True}
+        args['model_args']['beta'] = 1e-3
 
     return args
 
@@ -369,6 +385,8 @@ if __name__ == "__main__":
                         help='information bottleneck')
     args = parser.parse_args()
 
+    model_args = ['K', 'lr', 'use_polyak' 'beta']
+
     if args.deter:
         model_id = 'deter'
     elif args.mine:
@@ -377,9 +395,9 @@ if __name__ == "__main__":
     exp_args = get_default_args(model_id)
     for key, value in args.__dict__.items():
         if value is not None:
-            exp_args[key] = value
-
-    if args.beta is not None:
-        exp_args['model_args']['beta'] = args.beta
+            if key in model_args:
+                exp_args['model_args'][key] = value
+            else:
+                exp_args[key] = value
 
     run(model_id, exp_args)

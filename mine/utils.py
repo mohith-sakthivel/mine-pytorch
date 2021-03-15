@@ -24,13 +24,13 @@ class PolyakAveraging():
 
     def on_train_batch_end(self, module):
         device = self._avg_module.device
-        for src, dst in zip(module.polyak_parameters(), self._avg_module.polyak_parameters()):
+        for src, dst in zip(module.get_model_parameters(), self._avg_module.get_model_parameters()):
             dst.detach().copy_(self._alpha * dst + (1-self._alpha) * src.detach().to(device))
 
     def on_train_end(self, module):
         torch.save(module.state_dict, module.logdir.joinpath('train_end.pth'))
         device = module.device
-        for src, dst in zip(self._avg_module.polyak_parameters(), module.polyak_parameters()):
+        for src, dst in zip(self._avg_module.get_model_parameters(), module.get_model_parameters()):
             dst.detach().copy_(src.detach().to(device))
         torch.save(module.state_dict, module.logdir.joinpath('ema_weights.pth'))
         self._avg_module = None
