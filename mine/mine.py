@@ -39,23 +39,6 @@ class UnbiasedLogMeanExp(Function):
             (i.exp() / ((ema+UnbiasedLogMeanExp.epsilon)*mean_numel))
         return grad_i, grad_ema
 
-# class UnbiasedWrapper(Function):
-
-#     epsilon = 1e-6
-
-#     @staticmethod
-#     def forward(ctx, i, ema):
-#         ctx.save_for_backward(i, ema)
-#         return i
-
-#     @staticmethod
-#     def backward(ctx, grad_output):
-#         i, ema = ctx.saved_tensors
-#         grad_i = grad_ema = None
-#         ratio = i.exp().mean(dim=0) / (ema)
-#         grad_i = grad_output * ratio.clip(0.5, 2)
-#         return grad_i, grad_ema
-
 
 class Classifer(nn.Module):
     def __init__(self, base_net, K, lr=1e-4, base_net_args={}, use_polyak=True, logdir='.'):
@@ -67,7 +50,6 @@ class Classifer(nn.Module):
         self._lr = lr
         self._use_polyak = use_polyak
         self.logdir = logdir
-        self._device = 'cpu'
 
         self._base_net = base_net(
             input_dim=28*28, output_dim=K, **base_net_args)
@@ -167,7 +149,7 @@ class MINE_Classifier(Classifer):
         self._decay = 0.99
         self._beta = beta
         self._unbiased = True
-        self._exp_t_ma = {}
+        self._current_epoch = 0
 
     def configure_optimizers(self):
         super().configure_optimizers()
@@ -185,51 +167,39 @@ class MINE_Classifier(Classifer):
             x = x_dist.rsample()
         return x, x_dist
 
-    def _update_ema(self, t_margin, called_from):
+    def step_epoch(self):
+        self._current_epoch += 1
+
+    def _update_ema(self, t_margin):
         with torch.no_grad():
             exp_t = t_margin.exp().mean(dim=0)
-            if called_from in self._exp_t_ma:
-                self._exp_t_ma[called_from] = self._decay * self._exp_t_ma[called_from] + (1-self._decay) * exp_t
+            if hasattr(self, '_exp_t_ma'):
+                self._exp_t_ma = self._decay * self._exp_t_ma + (1-self._decay) * exp_t
             else:
-                self._exp_t_ma[called_from] = exp_t
-            logger.scalar(exp_t, 'exp_t_'+called_from, step=ee+ss/600, accumulator=None)
-            logger.scalar(self._exp_t_ma[called_from], 'exp_t_ema_'+called_from, step=ee + ss/600, accumulator=None)
-            logger.scalar(exp_t/self._exp_t_ma[called_from], 'ratio_'+called_from, step=ee + ss/600, accumulator=None)
+                self._exp_t_ma = exp_t
 
-    def _get_mi_bound(self, T, x, z, called_from):
+    def _get_mi_bound(self, T, x, z, update_ema=False):
         t_joint = T(x, z).mean(dim=0)
         z_margin = z[torch.randperm(x.shape[0])]
         t_margin = T(x, z_margin)
-        if self._unbiased and ee>5:
-            _ = self._update_ema(t_margin, called_from)
-            if ee > 10:
-                # t_margin = UnbiasedWrapper.apply(t_margin, self._exp_t_ma[called_from])
-                log_exp_t = UnbiasedLogMeanExp.apply(t_margin, self._exp_t_ma[called_from])
-            else:
-                log_exp_t = t_margin.logsumexp(dim=0).subtract(math.log(x.shape[0]))
+        # update exponential moving average for unibiased estimate
+        if self._unbiased and update_ema and self._current_epoch > 5:
+            self._update_ema(t_margin)
+        # Calculate biased or unbiased estimate (post annealing period only)
+        if self._unbiased and self._current_epoch > 10:
+            log_exp_t = UnbiasedLogMeanExp.apply(t_margin, self._exp_t_ma)
         else:
             log_exp_t = t_margin.logsumexp(dim=0).subtract(math.log(x.shape[0]))
-        mi = t_joint - log_exp_t
-        return mi, log_exp_t
+        # mi lower bound
+        return t_joint - log_exp_t
 
     def model_train_step(self, x, y, opt, logger):
         """ Train classifier """
         opt.zero_grad()
         # calculate loss
         z, z_dist = self._get_train_embedding(x)
-
-        # ************************************************************************
-        logger.scalar(z_dist.mean, 'z_mean', accumulator='train')
-        logger.scalar(z_dist.stddev, 'z_std', accumulator='train')
-        # ************************************************************************
-        
         self._cache = {'z': z.detach()}  # cache z for MINE loss calculation
-        mi_xz, log_exp_t = self._get_mi_bound(self._T, x, z, 'model')
-
-        # ************************************************************************
-        logger.scalar(log_exp_t, 'log_exp_t', accumulator='train')
-        # ************************************************************************
-
+        mi_xz = self._get_mi_bound(self._T, x, z, update_ema=True)
         logits = self._logits(z)
         cross_entropy = F.cross_entropy(logits, y)
         loss = cross_entropy + self._beta * mi_xz
@@ -248,8 +218,7 @@ class MINE_Classifier(Classifer):
     def mine_train_step(self, x, z, opt, logger):
         opt.zero_grad()
         # calculate loss
-        loss, log_exp_t = self._get_mi_bound(self._T, x, z.detach(), 'mine')
-        loss = -loss
+        loss = -self._get_mi_bound(self._T, x, z.detach())
         # log stats
         logger.scalar(loss, 'mi_est_loss',
                       accumulator='train', progbar=True)
@@ -308,8 +277,7 @@ def run(model_id, args):
     # Training loop
     model.invoke_callback('on_train_start')
     for epoch in tqdm.trange(1, args['epochs']+1, disable=True):
-        ee = epoch
-
+        model.step_epoch()
         model.train(True)
         for batch_idx, batch in enumerate(tqdm.tqdm(train_loader,
                                                     desc='{}/{} Epochs'.format(
@@ -317,11 +285,9 @@ def run(model_id, args):
                                                     unit=' batches',
                                                     postfix=logger.get_progbar_desc(),
                                                     leave=False)):
-            ss = batch_idx
             batch_stats = model.training_step(batch, batch_idx, logger)
             model.invoke_callback('on_train_batch_end')
         train_stats = logger.scalar_queue_flush('train', epoch)
-        # _ = logger.scalar_queue_flush('mi_debug', epoch)
 
         for sch in model.schedulers:
             if epoch % sch['frequency'] == 0:
