@@ -96,6 +96,9 @@ class Classifer(nn.Module):
     def get_model_parameters(self):
         return itertools.chain(*[module.parameters() for module in self._model_list])
 
+    def step_epoch(self):
+        self._current_epoch += 1
+
     def _unpack_batch(self, batch):
         batch = [item.to(self.device) for item in batch]
         return batch
@@ -172,9 +175,6 @@ class MINE_Classifier(Classifer):
             x_dist = dist.Independent(dist.Normal(mean, std), 1)
             x = x_dist.rsample()
         return x, x_dist
-
-    def step_epoch(self):
-        self._current_epoch += 1
 
     def _update_ema(self, t_margin):
         with torch.no_grad():
