@@ -327,7 +327,7 @@ def get_default_args(model_id):
         'exp_name': 'mine_ib',
         'seed': 0,
         # Trainer args
-        'device': 'cuda',
+        'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         'epochs': 200,
         'logdir': './logs',
         'validation_freq': 5,
