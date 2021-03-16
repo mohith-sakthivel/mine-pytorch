@@ -1,8 +1,8 @@
 # Mutual Information Neural Estimation
 
-This repository contains a pytorch implementation of the Information Bottleneck (IB) using Mutual Information Neural Estimation (MINE). [Belghazi et al., 2018]
+This repository contains a pytorch implementation of the Information Bottleneck (IB) using Mutual Information Neural Estimation (MINE). [[Belghazi et al., 2018]](#references)
 
-A standard baseline MLP (as described in Deep VIB paper [Alemi et al., 2017]) has been used for comparison.
+A standard baseline MLP (as described in Deep VIB paper [[Alemi et al., 2017]](#references)) has been used for comparison.
 
 ## Setup
 
@@ -20,7 +20,7 @@ conda activate mine
     python3 -m mine.mine --deter
     ```
 
-    The baseline model is a standard MLP with 3 hidden layers (784-1024-1024) and ReLU non-linearity. During training, an exponential weighted average of the parameters is maintained and these averaged parameters are used at test time.
+    The baseline model is a standard MLP with 3 hidden layers and ReLU non-linearity. During training, an exponential weighted average of the parameters is maintained and these averaged parameters are used at test time.
 
 
 * To run MINE+IB model

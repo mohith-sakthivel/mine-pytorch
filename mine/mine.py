@@ -159,9 +159,9 @@ class MINE_Classifier(Classifer):
 
     def _configure_mine_optimizers(self):
         mine_opt = optim.Adam(self._T.parameters(),
-                              lr=self._lr, betas=(0.5, 0.999))
+                              lr=5*self._lr, betas=(0.5, 0.999))
         scheduler = {
-            'scheduler': optim.lr_scheduler.ExponentialLR(mine_opt, gamma=0.97),
+            'scheduler': optim.lr_scheduler.ExponentialLR(mine_opt, gamma=0.98),
             'frequency': 2
         }
         self.optimizers.append(mine_opt)
@@ -276,6 +276,7 @@ def run(model_id, args):
     args['model_args']['logdir'] = logdir
 
     model = Model(MLP, **args['model_args'])
+    print('Using {}...'.format(args['device']))
     model.to(args['device'])
 
     # Training loop
@@ -316,6 +317,7 @@ def run(model_id, args):
     print('***************************************************')
     print('Model Test Error: {:.4f}%'.format(test_out['error']))
     print('***************************************************')
+    logger.close()
 
 
 def get_default_args(model_id):
@@ -372,9 +374,10 @@ if __name__ == "__main__":
 
     parser.add_argument('--beta', action='store', type=float,
                         help='information bottleneck')
+    parser.add_argument('--unbiased', action='store', type=bool)
     args = parser.parse_args()
 
-    model_args = ['K', 'lr', 'use_polyak' 'beta']
+    model_args = ['K', 'lr', 'use_polyak' 'beta', 'unbiased']
 
     if args.deter:
         model_id = 'deter'

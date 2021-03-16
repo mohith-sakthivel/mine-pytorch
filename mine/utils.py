@@ -91,6 +91,10 @@ class Logger():
     def get_progbar_desc(self):
         return self._progbar.get_descriptor()
 
+    def close(self):
+        self._tb_logger.flush()
+        self._tb_logger.close()
+
 
 class StatsDescriptor:
     def __init__(self):
