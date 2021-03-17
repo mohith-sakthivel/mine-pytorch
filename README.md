@@ -7,7 +7,7 @@ A standard baseline MLP (as described in Deep VIB paper [[Alemi et al., 2017]](#
 ## Setup
 
 ```
-git clone https://github.com/mohith-sakthivel/mutual_information_neural_estimation.git mine
+git clone https://github.com/mohith-sakthivel/mine-pytorch.git mine
 cd mine
 
 conda create -n mine -f environment.yml
