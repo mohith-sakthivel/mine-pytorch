@@ -149,18 +149,19 @@ class Classifer(nn.Module):
 
 
 class MINE_Classifier(Classifer):
-    def __init__(self, base_net, K, beta=1e-3, unbiased=True, **kwargs):
+    def __init__(self, base_net, K, beta=1e-3, mine_lr=1e-4, unbiased=True, **kwargs):
         super().__init__(base_net, K, **kwargs)
         self._T = StatisticsNet(28*28, K)
         self._decay = 0.999  # decay for ema (not tuned)
         self._beta = beta
+        self._mine_lr = mine_lr
         self._unbiased = unbiased
         self._ema = None
         self._configure_mine_optimizers()
 
     def _configure_mine_optimizers(self):
         mine_opt = optim.Adam(self._T.parameters(),
-                              lr=5*self._lr, betas=(0.5, 0.999))
+                              lr=self._mine_lr, betas=(0.5, 0.999))
         scheduler = {
             'scheduler': optim.lr_scheduler.ExponentialLR(mine_opt, gamma=0.98),
             'frequency': 2
@@ -356,6 +357,7 @@ def get_default_args(model_id):
         args['model_args']['K'] = 256
         args['model_args']['base_net_args'] = {
             'layers': [784, 1024, 1024], 'stochastic': True}
+        args['model_args']['mine_lr'] = 1e-4
         args['model_args']['beta'] = 1e-3
 
     return args
@@ -382,9 +384,10 @@ if __name__ == "__main__":
                         action='store_true', help='Use unbiased MI estimator')
     parser.add_argument('--biased', dest='unbiased',
                         action='store_false', help='Use biased MI estimator')
+    parser.add_argument('--mine_lr', action='store', type=float)
     args = parser.parse_args()
 
-    model_args = ['K', 'lr', 'use_polyak', 'beta', 'unbiased']
+    model_args = ['K', 'lr', 'use_polyak', 'beta', 'mine_lr', 'unbiased']
 
     exp_args = get_default_args(args.model_id)
     for key, value in args.__dict__.items():
