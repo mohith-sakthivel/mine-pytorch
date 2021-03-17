@@ -1,4 +1,4 @@
-name: dl
+name: mine
 channels:
   - pytorch
   - conda-forge
@@ -158,4 +158,4 @@ dependencies:
     - tqdm==4.59.0
     - werkzeug==1.0.1
     - yarl==1.6.3
-prefix: /home/mohith/miniconda3/envs/dl
+prefix: /home/mohith/miniconda3/envs/mine

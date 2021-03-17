@@ -10,7 +10,7 @@ A standard baseline MLP (as described in Deep VIB paper [[Alemi et al., 2017]](#
 git clone https://github.com/mohith-sakthivel/mine-pytorch.git mine
 cd mine
 
-conda create -n mine -f environment.yml
+conda env create -f environment.yml
 conda activate mine
 ```
 
