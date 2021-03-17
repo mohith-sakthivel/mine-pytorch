@@ -1,6 +1,7 @@
 import math
 import time
 import tqdm
+import yaml
 import pathlib
 import argparse
 import itertools
@@ -151,7 +152,7 @@ class MINE_Classifier(Classifer):
     def __init__(self, base_net, K, beta=1e-3, unbiased=True, **kwargs):
         super().__init__(base_net, K, **kwargs)
         self._T = StatisticsNet(28*28, K)
-        self._decay = 0.999 # decay for ema (not tuned)
+        self._decay = 0.999  # decay for ema (not tuned)
         self._beta = beta
         self._unbiased = unbiased
         self._ema = None
@@ -243,12 +244,13 @@ class MINE_Classifier(Classifer):
         self.mine_train_step(x, self._cache['z'], mine_opt, logger)
 
 
-def run(model_id, args):
+def run(args):
+
     if args['seed'] is not None:
         torch.manual_seed(args['seed'])
-    if model_id == 'deter':
+    if args['model_id'] == 'deter':
         Model = Classifer
-    elif model_id == 'mine':
+    elif args['model_id'] == 'mine':
         Model = MINE_Classifier
 
     data_transforms = transforms.Compose([transforms.ToTensor(),
@@ -270,9 +272,11 @@ def run(model_id, args):
 
     logdir = pathlib.Path(args['logdir'])
     time_stamp = time.strftime("%d-%m-%Y_%H:%M:%S")
-    logdir = logdir.joinpath(model_id, '_'.join(
+    logdir = logdir.joinpath(args['model_id'], '_'.join(
         [args['exp_name'], 's{}'.format(args['seed']), time_stamp]))
     logger = Logger(log_dir=logdir)
+    with open(logdir.joinpath('hparams.json'), 'w') as out:
+        yaml.dump(args, out)
     args['model_args']['logdir'] = logdir
 
     model = Model(MLP, **args['model_args'])
@@ -367,24 +371,22 @@ if __name__ == "__main__":
                         help='Directory to log results')
 
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--deter', action='store_const',
-                       const=True, default=False)
-    group.add_argument('--mine', action='store_const',
-                       const=True, default=False)
+    group.add_argument('--deter', action='store_const', dest='model_id', const='deter',
+                       help='Run baseline')
+    group.add_argument('--mine', action='store_const', dest='model_id', const='mine',
+                       help='Run MINE + IB model')
 
     parser.add_argument('--beta', action='store', type=float,
-                        help='information bottleneck')
-    parser.add_argument('--unbiased', action='store', type=bool)
+                        help='information bottleneck coefficient')
+    parser.add_argument('--unbiased', dest='unbiased',
+                        action='store_true', help='Use unbiased MI estimator')
+    parser.add_argument('--biased', dest='unbiased',
+                        action='store_false', help='Use biased MI estimator')
     args = parser.parse_args()
 
-    model_args = ['K', 'lr', 'use_polyak' 'beta', 'unbiased']
+    model_args = ['K', 'lr', 'use_polyak', 'beta', 'unbiased']
 
-    if args.deter:
-        model_id = 'deter'
-    elif args.mine:
-        model_id = 'mine'
-
-    exp_args = get_default_args(model_id)
+    exp_args = get_default_args(args.model_id)
     for key, value in args.__dict__.items():
         if value is not None:
             if key in model_args:
@@ -392,4 +394,4 @@ if __name__ == "__main__":
             else:
                 exp_args[key] = value
 
-    run(model_id, exp_args)
+    run(exp_args)
