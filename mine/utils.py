@@ -112,3 +112,24 @@ class StatsDescriptor:
     
     def contains(self, tag):
         return tag in self._stats
+
+
+class BetaScheduler:
+    """
+        Schedules beta after an intial warmup period. Value is annealed from 
+        the intial value to the steady state value linearly.
+    """
+    def __init__(self, warm_up, value, anneal_period, init_value=0):
+        self._warm_up = warm_up
+        self._value = value
+        self._anneal_period = anneal_period
+        self._init_value = init_value
+
+    def get(self, epoch):
+        if epoch <= self._warm_up:
+            return self._init_value
+        elif epoch > (self._warm_up + self._anneal_period):
+            return self._value
+        else:
+            ratio = (epoch-self._warm_up)/(self._anneal_period)
+            return ratio * (self._value - self._init_value) + self._init_value

@@ -17,7 +17,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
 from mine.models import MLP, StatisticsNet
-from mine.utils import PolyakAveraging, Logger
+from mine.utils import PolyakAveraging, Logger, BetaScheduler
 
 
 class UnbiasedLogMeanExp(Function):
@@ -166,8 +166,8 @@ class MINE_Classifier(Classifer):
     def __init__(self, base_net, K, beta=1e-3, mine_lr=1e-4, unbiased=True, **kwargs):
         super().__init__(base_net, K, **kwargs)
         self._T = StatisticsNet(28*28, K)
-        self._decay = 0.999  # decay for ema (not tuned)
-        self._beta = beta
+        self._decay = 0.994  # decay for ema (not tuned)
+        self._beta = BetaScheduler(0, beta, 0) if isinstance(beta, float) else beta
         self._mine_lr = mine_lr
         self._unbiased = unbiased
         self._ema = None
@@ -223,10 +223,13 @@ class MINE_Classifier(Classifer):
         # calculate loss
         z, z_dist = self._get_train_embedding(x)
         self._cache = {'z': z.detach()}  # cache z for MINE loss calculation
-        mi_xz = self._get_mi_bound(x, z, update_ema=False)
         logits = self._logits(z)
         cross_entropy = F.cross_entropy(logits, y)
-        loss = cross_entropy + self._beta * mi_xz
+        if self._beta.get(self._current_epoch) == 0:
+            mi_xz = torch.zeros_like(cross_entropy)
+        else:
+            mi_xz = self._get_mi_bound(x, z, update_ema=False)
+        loss = cross_entropy + self._beta.get(self._current_epoch) * mi_xz
         # log train stats
         if z_dist is not None:
             logger.scalar(z_dist.entropy().mean(), 'z_post_ent',
@@ -373,7 +376,7 @@ def get_default_args(model_id):
     """
 
     args = {
-        'exp_name': 'mine_ib_decay_999e-3',
+        'exp_name': 'mine_ib',
         'seed': 0,
         # Trainer args
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
