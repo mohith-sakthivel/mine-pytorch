@@ -34,3 +34,5 @@ conda activate mine
 1. M I Belghazi, A Baratin, S Rajeswar, S Ozair, Y Bengio, A Courville, R D Hjelm - MINE: Mutual Information Neural Estimation, ICML, 2018. ([paper](https://arxiv.org/abs/1801.04062))
 
 2. A A Alemi, I Fischer, J V Dillon, K Murphy - Deep Variational Information Bottleneck, ICLR, 2017. ([paper](https://arxiv.org/abs/1612.00410))
+
+3. Insights from this [reddit thread](https://www.reddit.com/r/MachineLearning/comments/dszzkk/discussion_is_minemutual_information_neural/)

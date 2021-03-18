@@ -166,7 +166,7 @@ class MINE_Classifier(Classifer):
     def __init__(self, base_net, K, beta=1e-3, mine_lr=1e-4, unbiased=True, **kwargs):
         super().__init__(base_net, K, **kwargs)
         self._T = StatisticsNet(28*28, K)
-        self._decay = 0.99  # decay for ema (not tuned)
+        self._decay = 0.999  # decay for ema (not tuned)
         self._beta = beta
         self._mine_lr = mine_lr
         self._unbiased = unbiased
@@ -261,10 +261,10 @@ class MINE_Classifier(Classifer):
 
         if not mine_only:
             self.model_train_step(x, y, model_opt, logger)
-        else:
-            z, _ = self._get_train_embedding(x)
-            self._cache['z'] = z.detach()
-
+        if 'z' not in self._cache.keys():
+            with torch.no_grad():
+                z, _ = self._get_train_embedding(x)
+                self._cache['z'] = z
         self.mine_train_step(x, self._cache.pop('z'), mine_opt, logger)
 
 
@@ -373,7 +373,7 @@ def get_default_args(model_id):
     """
 
     args = {
-        'exp_name': 'mine_ib',
+        'exp_name': 'mine_ib_decay_999e-3',
         'seed': 0,
         # Trainer args
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
