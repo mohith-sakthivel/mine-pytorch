@@ -404,7 +404,7 @@ def get_default_args(model_id):
         args['model_args']['base_net_args'] = {
             'layers': [784, 1024, 1024], 'stochastic': True}
         args['model_args']['mine_lr'] = 1e-4
-        args['model_args']['beta'] = 1e-3
+        args['model_args']['beta'] = 1e-6
         args['model_args']['unbiased'] = True
         args['mine_freq'] = 3
 
