@@ -111,15 +111,16 @@ class Classifer(nn.Module):
         batch = [item.to(self.device) for item in batch]
         return batch
 
-    def _get_embedding(self, x):
+    def _get_embedding(self, x, mc_samples=1):
         x = self._base_net(x)
         if self._base_net.is_stochastic():
             mean, std = x
-            x = dist.Independent(dist.Normal(mean, std), 1).rsample()
-        return x
+            z = dist.Independent(dist.Normal(mean, std), 1).rsample([mc_samples])
+            z = z.mean(dim=0)
+        return z
 
-    def forward(self, x):
-        x = self._get_embedding(x)
+    def forward(self, x, mc_samples=1):
+        x = self._get_embedding(x, mc_samples=mc_samples)
         return self._logits(x)
 
     def _get_eval_stats(self, batch, batch_idx):
@@ -185,12 +186,12 @@ class MINE_Classifier(Classifer):
 
     def _get_train_embedding(self, x):
         x = self._base_net(x)
-        x_dist = None
+        z_dist = None
         if self._base_net.is_stochastic():
             mean, std = x
-            x_dist = dist.Independent(dist.Normal(mean, std), 1)
-            x = x_dist.rsample()
-        return x, x_dist
+            z_dist = dist.Independent(dist.Normal(mean, std), 1)
+            z = z_dist.rsample()
+        return z, z_dist
 
     def _update_ema(self, t_margin):
         with torch.no_grad():
