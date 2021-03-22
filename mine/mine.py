@@ -112,9 +112,9 @@ class Classifer(nn.Module):
         return batch
 
     def _get_embedding(self, x, mc_samples=1):
-        x = self._base_net(x)
+        z = self._base_net(x)
         if self._base_net.is_stochastic():
-            mean, std = x
+            mean, std = z
             z = dist.Independent(dist.Normal(mean, std),
                                  1).rsample([mc_samples])
             z = z.mean(dim=0)
@@ -182,10 +182,10 @@ class MINE_Classifier(Classifer):
         self.optimizers.append(mine_opt)
 
     def _get_train_embedding(self, x):
-        x = self._base_net(x)
+        z = self._base_net(x)
         z_dist = None
         if self._base_net.is_stochastic():
-            mean, std = x
+            mean, std = z
             z_dist = dist.Independent(dist.Normal(mean, std), 1)
             z = z_dist.rsample()
         return z, z_dist
@@ -258,20 +258,27 @@ class MINE_Classifier(Classifer):
         grad_norm = self._get_grad_norm(self._T.parameters(), self.device)
         logger.scalar(grad_norm, 'mine_grad_norm', accumulator='train-mine')
 
-    def training_step(self, batch, batch_idx, logger, mine_only=False, model_only=False):
+    def training_step(self, batch, batch_idx, logger, train_mine=False):
         model_opt, mine_opt = self.optimizers
         x, y = self._unpack_batch(batch)
         x = x.view(x.shape[0], -1)
+        self.model_train_step(x, y, model_opt, logger)
 
-        if not mine_only:
-            self.model_train_step(x, y, model_opt, logger)
-        if not model_only:
+        if train_mine:
             if 'z' not in self._cache.keys():
                 with torch.no_grad():
                     z, _ = self._get_train_embedding(x)
                     self._cache['z'] = z
             self.mine_train_step(x, self._cache['z'], mine_opt, logger)
         self._cache = {}
+
+    def mine_training_step(self, batch, batch_idx, logger):
+        _, mine_opt = self.optimizers
+        x, _ = self._unpack_batch(batch)
+        x = x.view(x.shape[0], -1)
+        with torch.no_grad():
+            z, _ = self._get_train_embedding(x)
+        self.mine_train_step(x, z, mine_opt, logger)
 
 
 def run(args):
@@ -318,32 +325,32 @@ def run(args):
     for epoch in tqdm.trange(1, args['epochs']+1, disable=True):
         model.step_epoch()
         model.train(True)
+    
+        # Train MINE
+        if args['model_id'] == 'mine':
+            for i in tqdm.trange(args['mine_freq'], disable=True):
+                for batch_idx, batch in enumerate(tqdm.tqdm(train_loader,
+                                                            desc='MINE | {}/{} Epochs'.format(
+                                                                (epoch-1)*args['mine_freq'] + i, args['epochs']*args['mine_freq']),
+                                                            unit='batches',
+                                                            postfix=logger.get_progbar_desc(),
+                                                            leave=False)):
+                    _ = model.mine_training_step(batch, batch_idx, logger)
+                # Log data for MINE training epochs
+                _ = logger.scalar_queue_flush(
+                    'train-mine', ((epoch-1)*args['mine_freq'])+i+1)
 
+        # Train Model
         for batch_idx, batch in enumerate(tqdm.tqdm(train_loader,
                                                     desc='Model | {}/{} Epochs'.format(
                                                         epoch-1, args['epochs']),
                                                     unit=' batches',
                                                     postfix=logger.get_progbar_desc(),
                                                     leave=False)):
-            _ = model.training_step(batch, batch_idx, logger, model_only=True)
+            _ = model.training_step(batch, batch_idx, logger)
             model.invoke_callback('on_train_batch_end')
         # Log data for main training epochs
         _ = logger.scalar_queue_flush('train-model', epoch)
-
-        # Train MINE alone for extra epochs
-        if args['model_id'] == 'mine':
-            for i in tqdm.trange(1, args['mine_freq']+1, disable=True):
-                for batch_idx, batch in enumerate(tqdm.tqdm(train_loader,
-                                                            desc='Mine | {}/{} Epochs-{}/{} iters'.format(
-                                                                epoch-1, args['epochs'], i, args['mine_freq']),
-                                                            unit='batches',
-                                                            postfix=logger.get_progbar_desc(),
-                                                            leave=False)):
-                    _ = model.training_step(
-                        batch, batch_idx, logger, mine_only=True)
-                # Log data for MINE only training epochs
-                _ = logger.scalar_queue_flush(
-                    'train-mine', ((epoch-1)*args['mine_freq'])+i)
 
         for sch in model.schedulers:
             if epoch % sch['frequency'] == 0:
@@ -398,6 +405,7 @@ def get_default_args(model_id):
         args['model_args']['K'] = 1024
         args['model_args']['base_net_args'] = {
             'layers': [784, 1024], 'stochastic': False}
+        args['mc_samples'] = 1
 
     elif model_id == 'mine':
         args['model_args']['K'] = 256
