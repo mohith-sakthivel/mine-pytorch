@@ -9,7 +9,7 @@ class MLP(nn.Module):
     """
 
     def __init__(self, input_dim, output_dim, layers, stochastic=False,
-                 act=nn.ReLU, init_std_bias=0.0, min_std=1e-6):
+                 act=nn.ReLU, init_std_bias=-5.0, min_std=1e-8):
         super().__init__()
         self._stochastic = stochastic
         self._init_std_bias = init_std_bias
@@ -50,6 +50,20 @@ class StatisticsNet(nn.Module):
         self._layers.append(nn.Linear(x_dim+z_dim, 512))
         self._layers.append(nn.Linear(512, 512))
         self._out_layer = nn.Linear(512, 1)
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        for (name, param) in self._layers.named_parameters():
+            if 'weight' in name:
+                nn.init.kaiming_normal_(param, nonlinearity='relu')
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+
+        for (name, param) in self._out_layer.named_parameters():
+            if 'weight' in name:
+                nn.init.kaiming_normal_(param, nonlinearity='linear')
+            elif 'bias' in name:
+                nn.init.zeros_(param)
 
     def forward(self, x, z):
         x = torch.cat([x, z], dim=1)
