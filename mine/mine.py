@@ -151,13 +151,9 @@ class Classifer(nn.Module):
         logger.scalar(grad_norm, 'model_grad_norm', accumulator='train')
         return stats
 
-    def validation_step(self, batch, batch_idx, logger, mc_samples=1):
+    def evaluation_step(self, batch, batch_idx, logger, mc_samples=1, tag='error', accumulator='test'):
         stats = self._get_eval_stats(batch, batch_idx, mc_samples)
-        logger.scalar(stats['error'], 'error', accumulator='validation')
-
-    def test_step(self, batch, batch_idx, logger, mc_samples=1):
-        stats = self._get_eval_stats(batch, batch_idx, mc_samples)
-        logger.scalar(stats['error'], 'error', accumulator='test')
+        logger.scalar(stats['error'], tag, accumulator=accumulator)
 
 
 class MINE_Classifier(Classifer):
@@ -215,7 +211,7 @@ class MINE_Classifier(Classifer):
         # mi lower bound
         return t_joint - log_exp_t
 
-    def model_train_step(self, x, y, opt, logger):
+    def model_train(self, x, y, opt, logger):
         """ Train classifier """
         opt.zero_grad()
         # calculate loss
@@ -242,7 +238,7 @@ class MINE_Classifier(Classifer):
             self.get_model_parameters(), self.device)
         logger.scalar(grad_norm, 'model_grad_norm', accumulator='train')
 
-    def mine_train_step(self, x, z, opt, logger):
+    def mine_train(self, x, z, opt, logger):
         opt.zero_grad()
         # calculate loss
         loss = -self._get_mi_bound(x, z.detach(), update_ema=True)
@@ -259,14 +255,14 @@ class MINE_Classifier(Classifer):
         model_opt, mine_opt = self.optimizers
         x, y = self._unpack_batch(batch)
         x = x.view(x.shape[0], -1)
-        self.model_train_step(x, y, model_opt, logger)
+        self.model_train(x, y, model_opt, logger)
 
         if train_mine:
             if 'z' not in self._cache.keys():
                 with torch.no_grad():
                     z, _ = self._get_train_embedding(x)
                     self._cache['z'] = z
-            self.mine_train_step(x, self._cache['z'], mine_opt, logger)
+            self.mine_train(x, self._cache['z'], mine_opt, logger)
         self._cache = {}
 
     def mine_training_step(self, batch, batch_idx, logger):
@@ -275,7 +271,7 @@ class MINE_Classifier(Classifer):
         x = x.view(x.shape[0], -1)
         with torch.no_grad():
             z, _ = self._get_train_embedding(x)
-        self.mine_train_step(x, z, mine_opt, logger)
+        self.mine_train(x, z, mine_opt, logger)
 
 
 def run(args):
@@ -349,7 +345,8 @@ def run(args):
             model.eval()
             # testset used in validation step for observation/study purpose
             for batch_idx, batch in enumerate(test_loader):
-                model.validation_step(batch, batch_idx, logger, args['mc_samples'])
+                model.evaluation_step(batch, batch_idx, logger, args['mc_samples'],
+                                      tag='error', accumulator='validation')
             _ = logger.scalar_queue_flush('validation', epoch)
 
     model.invoke_callback('on_train_end')
@@ -358,14 +355,16 @@ def run(args):
     model.eval()
     print('***************************************************')
     for batch_idx, batch in enumerate(test_loader):
-        model.test_step(batch, batch_idx, logger, 1)
+        model.evaluation_step(batch, batch_idx, logger, 1)
     test_out = logger.scalar_queue_flush('test', epoch)
     print('Model Test Error: {:.4f}%'.format(test_out['error']))
     if args['mc_samples'] > 1:
         for batch_idx, batch in enumerate(test_loader):
-            model.test_step(batch, batch_idx, logger, args['mc_samples'])
+            model.evaluation_step(batch, batch_idx, logger, args['mc_samples'],
+                                  tag='error_mc')
         test_out_avg = logger.scalar_queue_flush('test', epoch)
-        print('Model Test Error ({} sample Avg): {:.4f}%'.format(args['mc_samples'], test_out_avg['error']))
+        print('Model Test Error ({} sample avg): {:.4f}%'.format(
+            args['mc_samples'], test_out_avg['error_mc']))
     print('***************************************************')
     logger.close()
 
