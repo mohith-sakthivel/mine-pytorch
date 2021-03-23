@@ -335,9 +335,9 @@ def run(args):
                     _ = model.mine_training_step(batch, batch_idx, logger)
             # Train Model
             _ = model.training_step(batch, batch_idx, logger)
+            model.invoke_callback('on_train_batch_end')
         # Post epoch processing
         _ = logger.scalar_queue_flush('train', epoch)
-        model.invoke_callback('on_train_batch_end')
 
         for sch in model.schedulers:
             if epoch % sch['frequency'] == 0:
