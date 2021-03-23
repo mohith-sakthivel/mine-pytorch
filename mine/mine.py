@@ -356,11 +356,16 @@ def run(args):
 
     # Test model
     model.eval()
-    for batch_idx, batch in enumerate(test_loader):
-        model.test_step(batch, batch_idx, logger, args['mc_samples'])
-    test_out = logger.scalar_queue_flush('test', epoch)
     print('***************************************************')
+    for batch_idx, batch in enumerate(test_loader):
+        model.test_step(batch, batch_idx, logger, 1)
+    test_out = logger.scalar_queue_flush('test', epoch)
     print('Model Test Error: {:.4f}%'.format(test_out['error']))
+    if args['mc_samples'] > 1:
+        for batch_idx, batch in enumerate(test_loader):
+            model.test_step(batch, batch_idx, logger, args['mc_samples'])
+        test_out_avg = logger.scalar_queue_flush('test', epoch)
+        print('Model Test Error ({} sample Avg): {:.4f}%'.format(args['mc_samples'], test_out_avg['error']))
     print('***************************************************')
     logger.close()
 
