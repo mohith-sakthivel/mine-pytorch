@@ -123,16 +123,18 @@ class Classifer(nn.Module):
             mean, std = z
             z = dist.Independent(dist.Normal(mean, std),
                                  1).rsample([mc_samples])
+        else:
+            z = z.unsqueeze(dim=0)
         return z
 
     def forward(self, x, mc_samples=1):
         x = self._get_embedding(x, mc_samples=mc_samples)
-        return self._logits(x)
+        return self._logits(x).mean(dim=0)
 
     def _get_eval_stats(self, batch, batch_idx, mc_samples=1):
         stats = {}
         x, y = self._unpack_batch(batch)
-        y_pred = self(x, mc_samples).mean(dim=0)
+        y_pred = self(x, mc_samples)
         y_pred = torch.argmax(y_pred, dim=1)
         stats['error'] = torch.sum(y != y_pred)/len(y)*100
         return stats
@@ -141,7 +143,7 @@ class Classifer(nn.Module):
         opt = self.optimizers[0]
         opt.zero_grad()
         x, y = self._unpack_batch(batch)
-        z = self._get_embedding(x)
+        z = self._get_embedding(x).mean(dim=0)
         logits = self._logits(z)
         loss = F.cross_entropy(logits, y)
         stats = {'loss': loss.detach().cpu().numpy()}
