@@ -21,6 +21,9 @@ from mine.utils import PolyakAveraging, Logger, BetaScheduler
 
 
 class UnbiasedLogMeanExp(Function):
+    """
+    Calculates and uses gradients with reduced bias
+    """
 
     epsilon = 1e-6
 
@@ -42,10 +45,11 @@ class UnbiasedLogMeanExp(Function):
 
 
 class Classifer(nn.Module):
+    """
+    Multi-label classifier with cross entropy loss
+    """
+
     def __init__(self, base_net, K, lr=1e-4, base_net_args={}, use_polyak=True, logdir='.'):
-        """
-        Multi-label classifier with cross entropy loss
-        """
         super().__init__()
         self._K = K
         self._lr = lr
@@ -109,7 +113,9 @@ class Classifer(nn.Module):
 
     def _unpack_batch(self, batch):
         batch = [item.to(self.device) for item in batch]
-        return batch
+        x, y = batch
+        x = x.view(x.shape[0], -1)
+        return (x, y)
 
     def _get_embedding(self, x, mc_samples=1):
         z = self._base_net(x)
@@ -117,7 +123,6 @@ class Classifer(nn.Module):
             mean, std = z
             z = dist.Independent(dist.Normal(mean, std),
                                  1).rsample([mc_samples])
-            z = z.mean(dim=0)
         return z
 
     def forward(self, x, mc_samples=1):
@@ -127,8 +132,7 @@ class Classifer(nn.Module):
     def _get_eval_stats(self, batch, batch_idx, mc_samples=1):
         stats = {}
         x, y = self._unpack_batch(batch)
-        x = x.view(x.shape[0], -1)
-        y_pred = self(x, mc_samples)
+        y_pred = self(x, mc_samples).mean(dim=0)
         y_pred = torch.argmax(y_pred, dim=1)
         stats['error'] = torch.sum(y != y_pred)/len(y)*100
         return stats
@@ -137,7 +141,6 @@ class Classifer(nn.Module):
         opt = self.optimizers[0]
         opt.zero_grad()
         x, y = self._unpack_batch(batch)
-        x = x.view(x.shape[0], -1)
         z = self._get_embedding(x)
         logits = self._logits(z)
         loss = F.cross_entropy(logits, y)
@@ -157,6 +160,9 @@ class Classifer(nn.Module):
 
 
 class MINE_Classifier(Classifer):
+    """
+    Classifier that uses Information Bottleneck (IB) regularization using MINE
+    """
 
     _ANNEAL_PERIOD = 0
     _EMA_ANNEAL_PERIOD = 0
@@ -241,7 +247,7 @@ class MINE_Classifier(Classifer):
     def mine_train(self, x, z, opt, logger):
         opt.zero_grad()
         # calculate loss
-        loss = -self._get_mi_bound(x, z.detach(), update_ema=True)
+        loss = -self._get_mi_bound(x, z, update_ema=True)
         # log stats
         logger.scalar(loss, 'estimator_loss',
                       accumulator='train', progbar=True)
@@ -252,23 +258,19 @@ class MINE_Classifier(Classifer):
         logger.scalar(grad_norm, 'mine_grad_norm', accumulator='train')
 
     def training_step(self, batch, batch_idx, logger, train_mine=False):
+        # train model
         model_opt, mine_opt = self.optimizers
         x, y = self._unpack_batch(batch)
-        x = x.view(x.shape[0], -1)
         self.model_train(x, y, model_opt, logger)
-
+        # train stochastic network
         if train_mine:
-            if 'z' not in self._cache.keys():
-                with torch.no_grad():
-                    z, _ = self._get_train_embedding(x)
-                    self._cache['z'] = z
             self.mine_train(x, self._cache['z'], mine_opt, logger)
         self._cache = {}
 
     def mine_training_step(self, batch, batch_idx, logger):
+        # train stochastic network
         _, mine_opt = self.optimizers
         x, _ = self._unpack_batch(batch)
-        x = x.view(x.shape[0], -1)
         with torch.no_grad():
             z, _ = self._get_train_embedding(x)
         self.mine_train(x, z, mine_opt, logger)
@@ -283,6 +285,7 @@ def run(args):
     elif args['model_id'] == 'mine':
         Model = MINE_Classifier
 
+    # setup datasets and dataloaders
     data_transforms = transforms.Compose([transforms.ToTensor(),
                                           transforms.Normalize(0.5, 0.5)])
 
@@ -300,11 +303,13 @@ def run(args):
                                               shuffle=False,
                                               num_workers=args['workers'])
 
+    # setup logging 
     logdir = pathlib.Path(args['logdir'])
     time_stamp = time.strftime("%d-%m-%Y_%H:%M:%S")
     logdir = logdir.joinpath(args['model_id'], '_'.join(
         [args['exp_name'], 's{}'.format(args['seed']), time_stamp]))
     logger = Logger(log_dir=logdir)
+    # save experimetn parameters
     with open(logdir.joinpath('hparams.json'), 'w') as out:
         yaml.dump(args, out)
     args['model_args']['logdir'] = logdir
@@ -327,7 +332,7 @@ def run(args):
                                                     leave=False)):
             # Train MINE
             if args['model_id'] == 'mine':
-                for i in tqdm.trange(args['mine_train_steps'], disable=True):
+                for _ in tqdm.trange(args['mine_train_steps'], disable=True):
                     _ = model.mine_training_step(batch, batch_idx, logger)
             # Train Model
             _ = model.training_step(batch, batch_idx, logger)
@@ -345,26 +350,29 @@ def run(args):
             model.eval()
             # testset used in validation step for observation/study purpose
             for batch_idx, batch in enumerate(test_loader):
-                model.evaluation_step(batch, batch_idx, logger, args['mc_samples'],
+                model.evaluation_step(batch, batch_idx, logger, mc_samples=1,
                                       tag='error', accumulator='validation')
+                if args['mc_samples'] > 1:
+                    model.evaluation_step(batch, batch_idx, logger, mc_samples=args['mc_samples'],
+                                          tag='error_mc', accumulator='validation')
             _ = logger.scalar_queue_flush('validation', epoch)
-
+    # invoke post training callbacks
     model.invoke_callback('on_train_end')
 
     # Test model
     model.eval()
-    print('***************************************************')
     for batch_idx, batch in enumerate(test_loader):
-        model.evaluation_step(batch, batch_idx, logger, 1)
+        model.evaluation_step(batch, batch_idx, logger, mc_samples=1, tag='error')
+        if args['mc_samples'] > 1:
+            model.evaluation_step(batch, batch_idx, logger,
+                                  mc_samples=args['mc_samples'], tag='error_mc')
     test_out = logger.scalar_queue_flush('test', epoch)
+
+    print('***************************************************')
     print('Model Test Error: {:.4f}%'.format(test_out['error']))
     if args['mc_samples'] > 1:
-        for batch_idx, batch in enumerate(test_loader):
-            model.evaluation_step(batch, batch_idx, logger, args['mc_samples'],
-                                  tag='error_mc')
-        test_out_avg = logger.scalar_queue_flush('test', epoch)
         print('Model Test Error ({} sample avg): {:.4f}%'.format(
-            args['mc_samples'], test_out_avg['error_mc']))
+            args['mc_samples'], test_out['error_mc']))
     print('***************************************************')
     logger.close()
 
@@ -432,7 +440,6 @@ if __name__ == "__main__":
                         const=True, help='Use unbiased MI estimator')
     parser.add_argument('--biased', dest='unbiased', action='store_const',
                         const=False, help='Use biased MI estimator')
-    parser.add_argument('--mine_lr', action='store', type=float)
     args = parser.parse_args()
 
     model_args = ['K', 'lr', 'use_polyak', 'beta', 'mine_lr', 'unbiased']

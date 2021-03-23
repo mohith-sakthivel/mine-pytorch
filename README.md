@@ -35,4 +35,5 @@ conda activate mine
 
 2. A A Alemi, I Fischer, J V Dillon, K Murphy - Deep Variational Information Bottleneck, ICLR, 2017. ([paper](https://arxiv.org/abs/1612.00410))
 
-3. Insights from this [reddit thread](https://www.reddit.com/r/MachineLearning/comments/dszzkk/discussion_is_minemutual_information_neural/)
+## Acknowledgements
+Thanks to Mohamed Belghazi for helping with the details of the original implementation.
