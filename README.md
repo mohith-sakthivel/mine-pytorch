@@ -28,6 +28,9 @@ conda activate mine
     python3 -m mine.mine --mine
     ```
 
+## Note
+This repo contains an implementation of MINE for information minimization only. For information maximization you should also incorporate adaptive gradient clipping as mentioned in [Belghazi et al.](#references). This is because MI is unbounded for typical high-dimensional use cases and hence gradients from the MI estimate can overwhelm gradients from the primary loss.
+
 
 
 ## References
