@@ -169,14 +169,14 @@ class MINE_Classifier(Classifer):
     _ANNEAL_PERIOD = 0
     _EMA_ANNEAL_PERIOD = 0
 
-    def __init__(self, base_net, K, beta=1e-3, mine_lr=2e-4, unbiased=True, **kwargs):
+    def __init__(self, base_net, K, beta=1e-3, mine_lr=2e-4, variant='unbiased', **kwargs):
         super().__init__(base_net, K, **kwargs)
         self._T = StatisticsNet(28*28, K)
         self._decay = 0.994  # decay for ema (not tuned)
         self._beta = BetaScheduler(
             0, beta, 0) if isinstance(beta, float) else beta
         self._mine_lr = mine_lr
-        self._unbiased = unbiased
+        self._variant = variant
         self._ema = None
         self._configure_mine_optimizers()
 
@@ -208,10 +208,11 @@ class MINE_Classifier(Classifer):
         t_margin = self._T(x, z_margin)
         # maintain an exponential moving average of exp_t under the marginal distribution
         # done to reduce bias in the estimator
-        if self._unbiased and update_ema and self._current_epoch > self._EMA_ANNEAL_PERIOD:
+        if ((self._variant == 'unbiased' and update_ema) and
+                self._current_epoch > self._EMA_ANNEAL_PERIOD):
             self._update_ema(t_margin)
         # Calculate biased or unbiased estimate
-        if self._unbiased and self._current_epoch > self._ANNEAL_PERIOD:
+        if self._variant == 'unbiased' and self._current_epoch > self._ANNEAL_PERIOD:
             log_exp_t = UnbiasedLogMeanExp.apply(t_margin, self._ema)
         else:
             log_exp_t = t_margin.logsumexp(
@@ -305,7 +306,7 @@ def run(args):
                                               shuffle=False,
                                               num_workers=args['workers'])
 
-    # setup logging 
+    # setup logging
     logdir = pathlib.Path(args['logdir'])
     time_stamp = time.strftime("%d-%m-%Y_%H:%M:%S")
     logdir = logdir.joinpath(args['model_id'], '_'.join(
@@ -364,7 +365,8 @@ def run(args):
     # Test model
     model.eval()
     for batch_idx, batch in enumerate(test_loader):
-        model.evaluation_step(batch, batch_idx, logger, mc_samples=1, tag='error')
+        model.evaluation_step(batch, batch_idx, logger,
+                              mc_samples=1, tag='error')
         if args['mc_samples'] > 1:
             model.evaluation_step(batch, batch_idx, logger,
                                   mc_samples=args['mc_samples'], tag='error_mc')
@@ -414,7 +416,7 @@ def get_default_args(model_id):
             'layers': [784, 1024, 1024], 'stochastic': True}
         args['model_args']['mine_lr'] = 2e-4
         args['model_args']['beta'] = 1e-3
-        args['model_args']['unbiased'] = True
+        args['model_args']['variant'] = 'unbiased'
         args['mine_train_steps'] = 1
         args['mc_samples'] = 12
 
@@ -438,13 +440,13 @@ if __name__ == "__main__":
 
     parser.add_argument('--beta', action='store', type=float,
                         help='information bottleneck coefficient')
-    parser.add_argument('--unbiased', dest='unbiased', action='store_const',
-                        const=True, help='Use unbiased MI estimator')
-    parser.add_argument('--biased', dest='unbiased', action='store_const',
-                        const=False, help='Use biased MI estimator')
+    parser.add_argument('--unbiased', dest='variant', action='store_const',
+                        const='unbiased', help='Use unbiased MI estimator')
+    parser.add_argument('--biased', dest='variant', action='store_const',
+                        const='biased', help='Use biased MI estimator')
     args = parser.parse_args()
 
-    model_args = ['K', 'lr', 'use_polyak', 'beta', 'mine_lr', 'unbiased']
+    model_args = ['K', 'lr', 'use_polyak', 'beta', 'mine_lr', 'variant']
 
     exp_args = get_default_args(args.model_id)
     for key, value in args.__dict__.items():
