@@ -17,7 +17,9 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
 from mine.models import MLP, StatisticsNet
-from mine.utils import PolyakAveraging, Logger, BetaScheduler
+from mine.utils.train import PolyakAveraging, BetaScheduler
+from mine.utils.log import Logger
+from mine.utils.data_loader import CustomSampler, CustomBatchSampler
 
 
 class UnbiasedLogMeanExp(Function):
@@ -185,6 +187,14 @@ class MINE_Classifier(Classifer):
                               lr=self._mine_lr, betas=(0.5, 0.999))
         self.optimizers.append(mine_opt)
 
+    def _unpack_margin_batch(self, batch):
+        batch = [item.to(self.device) for item in batch]
+        x, y = batch
+        x = x.view(x.shape[0], -1)
+        x, x_margin = torch.chunk(x, chunks=2, dim=0)
+        y, y_margin = torch.chunk(y, chunks=2, dim=0)
+        return x, y, x_margin, y_margin
+
     def _get_train_embedding(self, x):
         z = self._base_net(x)
         z_dist = None
@@ -202,10 +212,12 @@ class MINE_Classifier(Classifer):
             else:
                 self._ema = exp_t
 
-    def _get_mi_bound(self, x, z, update_ema=False):
+    def _get_mi_bound(self, x, z, z_margin=None, update_ema=False):
         t_joint = self._T(x, z).mean(dim=0)
-        z_margin = z[torch.randperm(x.shape[0])]
-        t_margin = self._T(x, z_margin)
+        if z_margin is not None:
+            t_margin = self._T(x, z_margin)
+        else:
+            t_margin = self._T(x, z[torch.randperm(x.shape[0])])
         # maintain an exponential moving average of exp_t under the marginal distribution
         # done to reduce bias in the estimator
         if ((self._variant == 'unbiased' and update_ema) and
@@ -220,15 +232,20 @@ class MINE_Classifier(Classifer):
         # mi lower bound
         return t_joint - log_exp_t
 
-    def model_train(self, x, y, opt, logger):
+    def model_train(self, x, y, x_margin, opt, logger):
         """ Train classifier """
         opt.zero_grad()
         # calculate loss
         z, z_dist = self._get_train_embedding(x)
         self._cache = {'z': z.detach()}  # cache z for MINE loss calculation
+        if x_margin is not None:
+            z_margin, _ = self._get_train_embedding(x_margin)
+            self._cache['z_margin'] = z_margin.detach()
+        else:
+            self._cache['z_margin'] = z_margin = None
         logits = self._logits(z)
         cross_entropy = F.cross_entropy(logits, y)
-        mi_xz = self._get_mi_bound(x, z, update_ema=True)
+        mi_xz = self._get_mi_bound(x, z, z_margin, update_ema=True)
         loss = cross_entropy + self._beta.get(self._current_epoch) * mi_xz
         loss /= math.log(2)
         # log train stats
@@ -247,10 +264,10 @@ class MINE_Classifier(Classifer):
             self.get_model_parameters(), self.device)
         logger.scalar(grad_norm, 'model_grad_norm', accumulator='train')
 
-    def mine_train(self, x, z, opt, logger):
+    def mine_train(self, x, z, z_margin, opt, logger):
         opt.zero_grad()
         # calculate loss
-        loss = -self._get_mi_bound(x, z, update_ema=True)
+        loss = -self._get_mi_bound(x, z, z_margin, update_ema=True)
         # log stats
         logger.scalar(loss, 'estimator_loss',
                       accumulator='train', progbar=True)
@@ -261,22 +278,35 @@ class MINE_Classifier(Classifer):
         logger.scalar(grad_norm, 'mine_grad_norm', accumulator='train')
 
     def training_step(self, batch, batch_idx, logger, train_mine=False):
-        # train model
+        # unpack data and optimizers
         model_opt, mine_opt = self.optimizers
-        x, y = self._unpack_batch(batch)
-        self.model_train(x, y, model_opt, logger)
-        # train stochastic network
+        if self._variant == 'marginal':
+            x, y, x_margin, _ = self._unpack_margin_batch(batch)
+        else:
+            x, y, x_margin = *self._unpack_batch(batch), None
+        #  train model
+        self.model_train(x, y, x_margin, model_opt, logger)
+        # train statistics network
         if train_mine:
-            self.mine_train(x, self._cache['z'], mine_opt, logger)
+            self.mine_train(x, self._cache['z'], self._cache['z_margin'],
+                            mine_opt, logger)
         self._cache = {}
 
     def mine_training_step(self, batch, batch_idx, logger):
-        # train stochastic network
+        # unpack data and optimizers
         _, mine_opt = self.optimizers
-        x, _ = self._unpack_batch(batch)
+        if self._variant == 'marginal':
+            x, _, x_margin, _ = self._unpack_margin_batch(batch)
+        else:
+            x, _, x_margin = *self._unpack_batch(batch), None
+        # get z embeddings from encoder
         with torch.no_grad():
             z, _ = self._get_train_embedding(x)
-        self.mine_train(x, z, mine_opt, logger)
+            z_margin = None
+            if self._variant == 'marginal':
+                z_margin, _ = self._get_train_embedding(x_margin)
+        # train statistics network
+        self.mine_train(x, z, z_margin, mine_opt, logger)
 
 
 def run(args):
@@ -294,10 +324,22 @@ def run(args):
 
     train_dataset = datasets.MNIST(
         './data', train=True, download=True, transform=data_transforms)
-    train_loader = torch.utils.data.DataLoader(train_dataset,
-                                               batch_size=args['batch_size'],
-                                               shuffle=True,
-                                               num_workers=args['workers'])
+    # use a custom dataloader if z marginals are to be calculated over the true marginal
+    if args['model_id'] == 'mine' and args['model_args']['variant'] == 'marginal':
+        # use a custom dataloader if z marginals are to be calculated over the true marginal.
+        # each batch contains two 2*batchsize samples [batchsize (for joint) + batchsize (for marginals)]
+        sampler = CustomSampler(train_dataset, secondary_replacement=False)
+        batch_sampler = CustomBatchSampler(sampler,
+                                           batch_size=args['batch_size'],
+                                           drop_last=False)
+        train_loader = torch.utils.data.DataLoader(train_dataset,
+                                                   batch_sampler=batch_sampler,
+                                                   num_workers=args['workers'])
+    else:
+        train_loader = torch.utils.data.DataLoader(train_dataset,
+                                                   batch_size=args['batch_size'],
+                                                   shuffle=True,
+                                                   num_workers=args['workers'])
 
     test_dataset = datasets.MNIST(
         './data', train=False, download=True, transform=data_transforms)
@@ -438,12 +480,17 @@ if __name__ == "__main__":
     group.add_argument('--mine', action='store_const', dest='model_id', const='mine',
                        help='Run MINE + IB model')
 
+    variant = parser.add_mutually_exclusive_group()
+    variant.add_argument('--unbiased', dest='variant', action='store_const',
+                         const='unbiased', help='Use unbiased MI estimator')
+    variant.add_argument('--biased', dest='variant', action='store_const',
+                         const='biased', help='Use biased MI estimator')
+    variant.add_argument('--marginal', dest='variant', action='store_const',
+                         const='marginal', help='Use samples from true marginal for MI estimation')
+
+    parser.add_argument('--epochs', action='store', type=int)
     parser.add_argument('--beta', action='store', type=float,
                         help='information bottleneck coefficient')
-    parser.add_argument('--unbiased', dest='variant', action='store_const',
-                        const='unbiased', help='Use unbiased MI estimator')
-    parser.add_argument('--biased', dest='variant', action='store_const',
-                        const='biased', help='Use biased MI estimator')
     args = parser.parse_args()
 
     model_args = ['K', 'lr', 'use_polyak', 'beta', 'mine_lr', 'variant']

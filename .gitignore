@@ -12,4 +12,5 @@ logs
 # helper files
 test-run.sh
 mine_ib_notebook.ipynb
+test.ipynb
 notes.txt
