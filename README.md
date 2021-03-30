@@ -17,7 +17,7 @@ conda activate mine
 ## Run
 * To run the baseline model with default parameters
     ```
-    python3 -m mine.mine --deter
+    python3 -m mine.ib --deter
     ```
 
     The baseline model is a standard MLP with 3 hidden layers and ReLU non-linearity. During training, an exponential weighted average of the parameters is maintained and these averaged parameters are used at test time.
@@ -25,7 +25,7 @@ conda activate mine
 
 * To run MINE+IB model
     ```
-    python3 -m mine.mine --mine
+    python3 -m mine.ib --mine
     ```
 
 ## Note
