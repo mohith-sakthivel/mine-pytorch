@@ -18,7 +18,7 @@ class UnbiasedLogMeanExp(Function):
     @staticmethod
     def forward(ctx, i, ema):
         ctx.save_for_backward(i, ema)
-        mean_numel = torch.tensor(i.shape[0])
+        mean_numel = torch.tensor(i.shape[0], dtype=torch.float)
         output = i.logsumexp(dim=0).subtract(torch.log(mean_numel))
         return output
 
@@ -26,7 +26,7 @@ class UnbiasedLogMeanExp(Function):
     def backward(ctx, grad_output):
         i, ema = ctx.saved_tensors
         grad_i = grad_ema = None
-        mean_numel = torch.tensor(i.shape[0])
+        mean_numel = torch.tensor(i.shape[0], dtype=torch.float)
         grad_i = grad_output * \
             (i.exp() / ((ema+UnbiasedLogMeanExp.epsilon)*mean_numel))
         return grad_i, grad_ema
