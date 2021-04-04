@@ -1,16 +1,7 @@
 # temp 
 *__pycache__
 *.ipynb_checkpoints/
-# packages
-pytorch-lightning
 # datasets
-MNIST
-# code editor
-.vscode
+data
 # log outputs
 logs
-# helper files
-test-run.sh
-mine_ib_notebook.ipynb
-test.ipynb
-notes.txt
