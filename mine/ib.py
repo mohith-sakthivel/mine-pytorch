@@ -23,7 +23,7 @@ from mine.utils.train import PolyakAveraging, BetaScheduler
 from mine.utils.data_loader import CustomSampler, CustomBatchSampler
 
 
-class Classifer(nn.Module):
+class Classifier(nn.Module):
     """
     Multi-label classifier with cross entropy loss
     """
@@ -140,7 +140,7 @@ class Classifer(nn.Module):
         logger.scalar(stats['error'], tag, accumulator=accumulator)
 
 
-class MINE_Classifier(Classifer):
+class MINE_Classifier(Classifier):
     """
     Classifier that uses Information Bottleneck (IB) regularization using MINE
     """
@@ -256,14 +256,18 @@ class MINE_Classifier(Classifer):
         self.mine_train(x, z, z_margin, mine_opt, logger)
 
 
+MODELS = {
+    'deter': Classifier,
+    'mine': MINE_Classifier
+}
+
+
 def run(args):
 
     if args['seed'] is not None:
         torch.manual_seed(args['seed'])
-    if args['model_id'] == 'deter':
-        Model = Classifer
-    elif args['model_id'] == 'mine':
-        Model = MINE_Classifier
+
+    Model = MODELS.get(args['model_id'])
 
     # setup datasets and dataloaders
     data_transforms = transforms.Compose([transforms.ToTensor(),
