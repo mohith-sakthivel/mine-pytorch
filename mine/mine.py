@@ -1,11 +1,13 @@
 import math
 
-from mine.models import StatisticsNet
+import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Function
+
+from mine.models import StatisticsNet
 
 
 class UnbiasedLogMeanExp(Function):
@@ -34,16 +36,16 @@ class UnbiasedLogMeanExp(Function):
 
 class MINE_Base(nn.Module):
 
-    def __init__(self, K, mine_lr=2e-4, variant='unbiased'):
+    def __init__(self, input_dim, K, est_lr=2e-4, variant='unbiased'):
         super().__init__()
-        self._T = StatisticsNet(28*28, K)
-        self._mine_lr = mine_lr
+        self._T = StatisticsNet(input_dim, K)
+        self._est_lr = est_lr
         self.variant = variant
         self._current_epoch = 0
 
     def _configure_optimizers(self):
         opt = optim.Adam(self._T.parameters(),
-                         lr=self._mine_lr, betas=(0.5, 0.999))
+                         lr=self._est_lr, betas=(0.5, 0.999))
         sch = None
         return opt, sch
 
@@ -103,11 +105,74 @@ class MINE_f_Div(MINE_Base):
         return t_joint - exp_t
 
 
-def get_estimator(K, args_dict):
+class NWJ(nn.Module):
+    """
+    NWJ (Nguyen, Wainwright, and Jordan) estimator
+    """
+
+    def __init__(self, input_dim, K, est_lr=2e-4, variant='unbiased'):
+        super().__init__()
+        self._critic = StatisticsNet(input_dim, K)
+        # from mine.models import ConcatCritic, BiLinearCritic
+        # self._critic = ConcatCritic(input_dim, K)
+        # self._critic = BiLinearCritic(input_dim, K)
+        self._est_lr = est_lr
+        self._current_epoch = 0
+        self.variant = variant
+
+    def _configure_optimizers(self):
+        opt = optim.Adam(self._critic.parameters(),
+                         lr=self._est_lr, betas=(0.5, 0.999))
+        sch = None
+        return opt, sch
+    
+    def step_epoch(self):
+        self._current_epoch += 1
+
+    @staticmethod
+    def logmeanexp_nondiag(tensor):
+        batch_size = tensor.shape[0]
+        device = tensor.device
+        dim = (0, 1)
+        numel = batch_size * (batch_size-1)
+        logsumexp = torch.logsumexp(tensor - torch.diag(np.inf * torch.ones(batch_size, device=device)), dim=dim)
+        return logsumexp - np.math.log(numel)
+
+    # def get_mi_bound(self,  x, z, z_margin=None, update_ema=None):
+    #     critic_matrix = self._critic(x, z) - 1
+    #     joint = torch.mean(torch.diagonal(critic_matrix), dim=0)
+    #     margin = torch.exp(self.logmeanexp_nondiag(critic_matrix))
+    #     return 1 + joint - margin
+
+    # def get_mi_bound(self,  x, z, z_margin=None, update_ema=None):
+    #     critic_matrix = self._critic(x, z)
+    #     joint = torch.mean(torch.diagonal(critic_matrix), dim=0)
+    #     mask = torch.logical_not(torch.diag(torch.ones(critic_matrix.shape[0],
+    #                                                    device=critic_matrix.device)))
+    #     margin = critic_matrix.view(-1)[mask.view(-1)]
+    #     numel = margin.shape[0]
+    #     margin = torch.logsumexp(margin, dim=0) - np.math.log(numel)
+    #     margin = torch.exp(margin-1)
+    #     return joint - margin
+
+    def get_mi_bound(self,  x, z, z_margin=None, update_ema=None):
+        joint = self._critic(x, z).mean(dim=0)
+        if z_margin is not None:
+            margin = self._critic(x, z_margin)
+        else:
+            margin = self._critic(x, z[torch.randperm(x.shape[0])])
+            margin = torch.logsumexp(margin, dim=0) - np.math.log(z.shape[0])
+            margin = torch.exp(margin-1)
+        return joint - margin
+
+
+def get_estimator(input_dim, K, args_dict):
     estimator = args_dict.pop('estimator')
     if estimator == 'dv':
-        return MINE_DV(K, **args_dict)
+        return MINE_DV(input_dim, K, **args_dict)
     elif estimator == 'fdiv':
-        return MINE_f_Div(K, **args_dict)
+        return MINE_f_Div(input_dim, K, **args_dict)
+    elif estimator == 'nwj':
+        return NWJ(input_dim, K, **args_dict)
     else:
         raise ValueError

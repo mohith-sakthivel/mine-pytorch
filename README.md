@@ -37,6 +37,3 @@ This repo contains an implementation of MINE for information minimization only. 
 1. M I Belghazi, A Baratin, S Rajeswar, S Ozair, Y Bengio, A Courville, R D Hjelm - MINE: Mutual Information Neural Estimation, ICML, 2018. ([paper](https://arxiv.org/abs/1801.04062))
 
 2. A A Alemi, I Fischer, J V Dillon, K Murphy - Deep Variational Information Bottleneck, ICLR, 2017. ([paper](https://arxiv.org/abs/1612.00410))
-
-## Acknowledgements
-Thanks to Mohamed Belghazi for helping with the details of the original implementation.

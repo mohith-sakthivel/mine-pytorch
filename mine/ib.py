@@ -147,7 +147,7 @@ class MINE_Classifier(Classifier):
 
     def __init__(self, base_net, K, beta=1e-3, mine_args={}, **kwargs):
         super().__init__(base_net, K, **kwargs)
-        self._mine = get_estimator(K, mine_args)
+        self._mine = get_estimator(28*28, K, mine_args)
         self._beta = BetaScheduler(
             0, beta, 0) if isinstance(beta, float) else beta
         self._configure_mine_optimizers()
@@ -411,7 +411,7 @@ def get_default_args(model_id):
         args['model_args']['beta'] = 1e-3
         args['model_args']['mine_args'] = {}
         args['model_args']['mine_args']['estimator'] = 'dv'
-        args['model_args']['mine_args']['mine_lr'] = 2e-4
+        args['model_args']['mine_args']['est_lr'] = 2e-4
         args['model_args']['mine_args']['variant'] = 'unbiased'
         args['mine_train_steps'] = 1
     return args
@@ -437,6 +437,8 @@ if __name__ == "__main__":
                          const='dv', help='Use Donsker-Varadhan estimator')
     estimator.add_argument('--fdiv', dest='estimator', action='store_const',
                          const='fdiv', help='Use f-divergence estimator')
+    estimator.add_argument('--nwj', dest='estimator', action='store_const',
+                         const='nwj', help='Use NWJ estimator')
 
     variant = parser.add_mutually_exclusive_group()
     variant.add_argument('--unbiased', dest='variant', action='store_const',
@@ -452,7 +454,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     model_args = ['K', 'lr', 'use_polyak', 'beta']
-    mine_args = ['estimator', 'mine_lr', 'variant']
+    mine_args = ['estimator', 'est_lr', 'variant']
 
     exp_args = get_default_args(args.model_id)
     for key, value in args.__dict__.items():
