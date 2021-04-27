@@ -72,22 +72,3 @@ class StatisticsNet(nn.Module):
             x = F.elu(hid_layer(x))
             x = x + 0.5 * torch.randn_like(x)
         return self._out_layer(x)
-
-
-class BiLinearCritic(nn.Module):
-
-    def __init__(self, x, z):
-        super().__init__()
-        self._W = nn.Linear(z, x, bias=False)
-
-    def forward(self, x, z):
-        return torch.matmul(x, self._W(z).transpose(0, 1))
-
-
-class ConcatCritic(StatisticsNet):
-
-    def forward(self, x, z):
-        batch_size = x.shape[0]
-        x = x.unsqueeze(dim=0).repeat(batch_size, 1, 1).view(batch_size**2, -1)
-        z = z.unsqueeze(dim=1).repeat(1, batch_size, 1).view(batch_size**2, -1)
-        return super().forward(x, z)

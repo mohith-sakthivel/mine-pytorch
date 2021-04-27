@@ -138,23 +138,6 @@ class NWJ(nn.Module):
         logsumexp = torch.logsumexp(tensor - torch.diag(np.inf * torch.ones(batch_size, device=device)), dim=dim)
         return logsumexp - np.math.log(numel)
 
-    # def get_mi_bound(self,  x, z, z_margin=None, update_ema=None):
-    #     critic_matrix = self._critic(x, z) - 1
-    #     joint = torch.mean(torch.diagonal(critic_matrix), dim=0)
-    #     margin = torch.exp(self.logmeanexp_nondiag(critic_matrix))
-    #     return 1 + joint - margin
-
-    # def get_mi_bound(self,  x, z, z_margin=None, update_ema=None):
-    #     critic_matrix = self._critic(x, z)
-    #     joint = torch.mean(torch.diagonal(critic_matrix), dim=0)
-    #     mask = torch.logical_not(torch.diag(torch.ones(critic_matrix.shape[0],
-    #                                                    device=critic_matrix.device)))
-    #     margin = critic_matrix.view(-1)[mask.view(-1)]
-    #     numel = margin.shape[0]
-    #     margin = torch.logsumexp(margin, dim=0) - np.math.log(numel)
-    #     margin = torch.exp(margin-1)
-    #     return joint - margin
-
     def get_mi_bound(self,  x, z, z_margin=None, update_ema=None):
         joint = self._critic(x, z).mean(dim=0)
         if z_margin is not None:
@@ -167,6 +150,7 @@ class NWJ(nn.Module):
 
 
 def get_estimator(input_dim, K, args_dict):
+    args_dict = args_dict.copy()
     estimator = args_dict.pop('estimator')
     if estimator == 'dv':
         return MINE_DV(input_dim, K, **args_dict)
