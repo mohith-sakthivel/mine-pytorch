@@ -400,7 +400,7 @@ def get_default_args(model_id):
     if model_id == 'deter':
         args['model_args']['K'] = 1024
         args['model_args']['base_net_args'] = {
-            'layers': [784, 1024], 'stochastic': False}
+            'layers': [784, 1024, 1024], 'stochastic': False}
         args['mc_samples'] = 1
 
     elif model_id == 'mine':
