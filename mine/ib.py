@@ -199,6 +199,8 @@ class MINE_Classifier(Classifier):
         if z_dist is not None:
             logger.scalar(z_dist.entropy().mean(), 'z_post_ent',
                           accumulator='train', progbar=True)
+            logger.scalar(z_dist.stddev.mean(), 'z_post_std_dev',
+                          accumulator='train', progbar=False)
         logger.scalar(cross_entropy, 'cross_ent',
                       accumulator='train', progbar=True)
         logger.scalar(mi_xz, 'mi_xz', accumulator='train', progbar=True)

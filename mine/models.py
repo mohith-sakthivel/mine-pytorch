@@ -12,8 +12,6 @@ class MLP(nn.Module):
                  act=nn.ReLU, init_std_bias=-5.0, min_std=1e-8):
         super().__init__()
         self._stochastic = stochastic
-        self._init_std_bias = init_std_bias
-        self._min_std = min_std
 
         net_layers = nn.ModuleList()
         inp = input_dim
@@ -21,7 +19,13 @@ class MLP(nn.Module):
             net_layers.append(nn.Linear(inp, layer_dim))
             net_layers.append(act())
             inp = layer_dim
-        outp = 2*output_dim if self._stochastic else output_dim
+
+        if self._stochastic:
+            self._init_std_bias = init_std_bias
+            self._min_std = min_std
+            outp = 2 * output_dim
+        else:
+            outp = output_dim
         net_layers.append(nn.Linear(inp, outp))
         self._net = nn.Sequential(*net_layers)
 
