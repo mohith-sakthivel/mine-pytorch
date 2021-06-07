@@ -308,7 +308,7 @@ def run(args):
         [args['exp_name'], 's{}'.format(args['seed']), time_stamp]))
     logger = Logger(log_dir=logdir)
     # save experimetn parameters
-    with open(logdir.joinpath('hparams.json'), 'w') as out:
+    with open(logdir.joinpath('hparams.yaml'), 'w') as out:
         yaml.dump(args, out)
     args['model_args']['logdir'] = logdir
 
