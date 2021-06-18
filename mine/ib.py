@@ -149,7 +149,7 @@ class MINE_Classifier(Classifier):
         super().__init__(base_net, K, **kwargs)
         self._mine = get_estimator(28*28, K, mine_args)
         self._beta = BetaScheduler(
-            0, beta, 0) if isinstance(beta, float) else beta
+            0, beta, 0) if isinstance(beta, (int, float)) else beta
         self._configure_mine_optimizers()
 
     def _configure_mine_optimizers(self):
